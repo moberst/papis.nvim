@@ -144,7 +144,7 @@ end
 ---@param paths? table #A list with paths of papis entries
 ---@return table #A list of { path = path, mtime = mtime } values
 function M.get_metadata(paths)
-  paths = paths or Scan.scan_dir(library_dir:expand(), { depth = 2, search_pattern = info_name })
+  paths = paths or Scan.scan_dir(library_dir:expand(), { depth = 3, search_pattern = info_name })
   local metadata = {}
   for _, path in ipairs(paths) do
     local mtime = fs_stat(path).mtime.sec
