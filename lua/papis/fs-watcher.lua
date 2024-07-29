@@ -7,23 +7,18 @@
 -- Adapted from: https://github.com/rktjmp/fwatch.nvim
 --
 
-local Path = require("plenary.path")
-local Scan = require("plenary.scandir")
+local Path = require("pathlib")
 
 local uv = vim.loop
 local fs_stat = uv.fs_stat
 local new_timer = uv.new_timer
 local api = vim.api
-
-local log = require("papis.logger")
-local config = require("papis.config")
-local library_dir = Path:new(config["papis_python"]["dir"]):expand()
-local info_name = config["papis_python"]["info_name"]
-local does_pid_exist = require("papis.utils").does_pid_exist
 local db = require("papis.sqlite-wrapper")
 if not db then
   return nil
 end
+local log = require("papis.log")
+local does_pid_exist = require("papis.utils").does_pid_exist
 local data = require("papis.data")
 if not data then
   return nil
@@ -39,8 +34,11 @@ local fs_watching_stopped = false
 ---@param on_error function #Function to run on error
 local function do_watch(path, on_event, on_error)
   local handle = uv.new_fs_event()
+  if not handle then
+    return
+  end
   local unwatch_cb = function()
-    uv.fs_event_stop(handle)
+    handle:stop()
   end
   local event_cb = function(err, filename)
     if err then
@@ -49,14 +47,18 @@ local function do_watch(path, on_event, on_error)
       on_event(filename, unwatch_cb)
     end
   end
-  uv.fs_event_start(handle, path, {}, event_cb)
-  table.insert(handles, handle)
+  handle:start(tostring(path), {}, event_cb)
+  handles[#handles + 1] = handle
 end
 
 ---Gets all directories in the library_dir
 ---@return table #A list of all directories in library_dir
 local function get_library_dirs()
-  local library_dirs = Scan.scan_dir(library_dir, { depth = 1, only_dirs = true })
+  local library_dir = Path(db.config:get_conf_value("dir"))
+  local library_dirs = {}
+  for path in library_dir:fs_iterdir() do
+    library_dirs[#library_dirs + 1] = path
+  end
   return library_dirs
 end
 
@@ -70,6 +72,7 @@ local function init_fs_watcher(dir_to_watch, is_library_root)
   ---@param filename string #The name of the file that triggered the event
   ---@param unwatch_cb function #The callback that stops a watcher
   local function do_handle_event(filename, unwatch_cb)
+    local info_name = db.config:get_conf_value("info_name")
     local mtime
     local entry_dir
     local info_path
@@ -77,16 +80,18 @@ local function init_fs_watcher(dir_to_watch, is_library_root)
     local do_update = true
     if is_library_root then
       log.debug("Filesystem event in the library root directory")
-      entry_dir = Path:new(dir_to_watch, filename)
-      info_path = entry_dir:joinpath(info_name)
+      entry_dir = Path(dir_to_watch, filename)
+      info_path = entry_dir / info_name
+      local entry_dir_str = tostring(entry_dir)
+      local info_path_str = tostring(info_path)
       if entry_dir:exists() and entry_dir:is_dir() then
-        log.debug(string.format("Filesystem event: path '%s' added", entry_dir:absolute()))
-        init_fs_watcher(entry_dir:absolute())
+        log.debug(string.format("Filesystem event: path '%s' added", entry_dir_str))
+        init_fs_watcher(entry_dir_str)
         if info_path:exists() then
-          mtime = fs_stat(info_path:absolute()).mtime.sec
+          mtime = fs_stat(info_path_str).mtime.sec
         end
       elseif entry_dir:is_dir() then
-        log.debug(string.format("Filesystem event: path '' removed", entry_dir:absolute()))
+        log.debug(string.format("Filesystem event: path '' removed", entry_dir_str))
         -- don't update here, because we'll catch it below under entry events
         do_update = false
       else
@@ -95,26 +100,28 @@ local function init_fs_watcher(dir_to_watch, is_library_root)
       end
     else
       log.debug("Filesystem event in entry directory")
-      entry_dir = Path:new(dir_to_watch)
-      info_path = entry_dir:joinpath(info_name)
+      entry_dir = Path(dir_to_watch)
+      info_path = entry_dir / info_name
+      local info_path_str = tostring(info_path)
       if info_path:exists() then
         -- info file exists, update with new info
-        log.debug(string.format("Filesystem event: '%s' changed", info_path:absolute()))
-        mtime = fs_stat(info_path:absolute()).mtime.sec
+        log.debug(string.format("Filesystem event: '%s' changed", info_path_str))
+        mtime = fs_stat(tostring(info_path)).mtime.sec
       elseif not entry_dir:exists() then
         -- info file and entry dir don't exist. delete entry (mtime = nil) and remove watcher
-        log.debug(string.format("Filesystem event: '%s' removed", info_path:absolute()))
+        log.debug(string.format("Filesystem event: '%s' removed", info_path_str))
         do_unwatch = true
       else
         -- info file doesn't exist but entry dir does. delete entry but keep watcher
-        log.debug(string.format("Filesystem event: '%s' removed", info_path:absolute()))
+        log.debug(string.format("Filesystem event: '%s' removed", info_path_str))
       end
     end
     if do_update then
+      local info_path_str = tostring(info_path)
       log.debug("Update database for this fs event...")
-      log.debug("Updating: " .. vim.inspect({ path = info_path:absolute(), mtime = mtime }))
+      log.debug("Updating: " .. vim.inspect({ path = info_path_str, mtime = mtime }))
       vim.defer_fn(function()
-        data.update_db({ path = info_path:absolute(), mtime = mtime })
+        data.update_db({ path = info_path_str, mtime = mtime })
       end, 200)
     elseif do_unwatch then
       log.debug("Removing watcher")
@@ -131,7 +138,7 @@ local function init_fs_watcher(dir_to_watch, is_library_root)
     -- disable watcher
     unwatch_cb()
     -- note, print still occurs even though we unwatched *future* events
-    log.warn(string.format("An error occured: %s", error))
+    vim.notify(string.format("An error occured: %s", error), vim.log.levels.ERROR)
   end)
 end
 
@@ -153,6 +160,7 @@ end
 ---Starts file system watchers for root dir and all entry dirs
 local function start_fs_watchers()
   log.debug("Set db state to indicate fswatcher is active")
+  local library_dir = Path(db.config:get_conf_value("dir"))
   db.state:set_fw_running(uv.os_getpid())
 
   log.debug("Setting up fswatcher for library root directory")
@@ -224,7 +232,7 @@ function M.stop()
   if not vim.tbl_isempty(handles) then
     log.trace("Stopping the fs watchers")
     for _, handle in ipairs(handles) do
-      uv.fs_event_stop(handle)
+      handle:stop()
     end
     handles = {}
     db.state:set_fw_running()

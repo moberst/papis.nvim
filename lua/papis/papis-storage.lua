@@ -5,8 +5,7 @@
 -- Reads out all the Papis yaml files and creates data ready for db
 --
 
-local Path = require("plenary.path")
-local Scan = require("plenary.scandir")
+local Path = require("pathlib")
 
 local fs_stat = vim.loop.fs_stat
 
@@ -15,16 +14,14 @@ if not db then
   return nil
 end
 local utils = require("papis.utils")
-local log = require("papis.logger")
+local log = require("papis.log")
 local config = require("papis.config")
-local library_dir = (Path:new(config["papis_python"]["dir"]))
-local info_name = config["papis_python"]["info_name"]
-local data_tbl_schema = config["data_tbl_schema"]
-local key_name_conversions = config["papis-storage"]["key_name_conversions"]
-local required_keys = config["papis-storage"]["required_keys"]
-local tag_format = config["papis-storage"]["tag_format"]
+local data_tbl_schema = config.data_tbl_schema
+local key_name_conversions = config["papis-storage"].key_name_conversions
+local required_keys = config["papis-storage"].required_keys
+local tag_format = config["papis-storage"].tag_format
 local have_determined_tag_format = false
-local yq_bin = config["yq_bin"]
+local yq_bin = config.yq_bin
 
 ---Determines if tag format is list, space separated, or comma separated
 ---@param tags any #Either a table or a string with tag(s)
@@ -51,9 +48,9 @@ local function ensure_tags_are_tbl(tags)
   -- we haven't determined it, it must be a single string tag
   if not have_determined_tag_format then
     tags = { tags }
-  -- if it's a table we don't need to do anything
+    -- if it's a table we don't need to do anything
   elseif tag_format == "tbl" then
-  -- otherwise split the string
+    -- otherwise split the string
   else
     tags = utils.do_split_str(tags, tag_format)
   end
@@ -71,12 +68,13 @@ local function is_valid_entry(entry, path)
       if entry[key] then
         is_valid = true
       else
-        log.info(string.format("The entry at '%s' is missing the key '%s' and will not be added.", path, key))
+        vim.notify(string.format("The entry at '%s' is missing the key '%s' and will not be added.", path, key),
+          vim.log.levels.WARN)
         break
       end
     end
   else
-    log.info(string.format("The entry at '%s' is faulty and will not be added.", path))
+    vim.notify(string.format("The entry at '%s' is faulty and will not be added.", path), vim.log.levels.WARN)
   end
   return is_valid
 end
@@ -87,8 +85,8 @@ end
 local function read_yaml(path)
   log.trace("Reading path: " .. path)
   local entry
-  local filepath = Path:new(path)
-  local handler = io.popen(yq_bin .. ' -oj "' .. filepath:absolute() .. '" 2>/dev/null')
+  local filepath = Path(path)
+  local handler = io.popen(yq_bin .. ' -oj "' .. tostring(filepath) .. '" 2>/dev/null')
   if handler then
     local as_json = handler:read("*all")
     handler:close()
@@ -126,8 +124,8 @@ local function make_full_paths(filenames, path)
 
   local full_paths = {}
   for _, filename in ipairs(filenames) do
-    local full_path = Path:new(path, filename):expand()
-    table.insert(full_paths, full_path)
+    local full_path = tostring(Path(path, filename))
+    full_paths[#full_paths + 1] = full_path
   end
   return full_paths
 end
@@ -144,13 +142,21 @@ end
 ---@param paths? table #A list with paths of papis entries
 ---@return table #A list of { path = path, mtime = mtime } values
 function M.get_metadata(paths)
-  paths = paths or Scan.scan_dir(library_dir:expand(), { depth = 3, search_pattern = info_name })
+  -- paths = paths or Scan.scan_dir(library_dir:expand(), { depth = 3, search_pattern = info_name })
+  local library_dir = Path(db.config:get_conf_value("dir"))
+  local info_name = db.config:get_conf_value("info_name")
+  if not paths then
+    paths = {}
+    for path in library_dir:fs_iterdir() do
+      if path:basename() == info_name then
+        paths[#paths + 1] = path
+      end
+    end
+  end
   local metadata = {}
   for _, path in ipairs(paths) do
-    local mtime = fs_stat(path).mtime.sec
-    -- path = Path:new(path)
-    -- path = path:parent():absolute()
-    table.insert(metadata, { path = path, mtime = mtime })
+    local mtime = fs_stat(tostring(path)).mtime.sec
+    metadata[#metadata + 1] = { path = tostring(path), mtime = mtime }
   end
   return metadata
 end
@@ -162,11 +168,11 @@ function M.get_data_full(metadata)
   metadata = metadata or M.get_metadata()
   local data_complete = {}
   for _, metadata_v in ipairs(metadata) do
-    local path = metadata_v["path"]
-    local mtime = metadata_v["mtime"]
+    local path = metadata_v.path
+    local mtime = metadata_v.mtime
     local entry = read_yaml(path)
     if is_valid_entry(entry, path) then
-      entry = do_convert_entry_keys(entry)
+      entry = do_convert_entry_keys(entry) --NOTE: entry is never nil because of `is_valid_entry()`
       local data = {}
       for key, type_of_val in pairs(data_tbl_schema) do
         if type(type_of_val) == "table" then
@@ -183,24 +189,26 @@ function M.get_data_full(metadata)
             entry[key] = ensure_tags_are_tbl(entry[key])
           end
           if (key == "files") or (key == "notes") then
-            local entry_path = Path:new(path):parent()
+            local entry_path = Path(path):parent()
             entry[key] = make_full_paths(entry[key], entry_path)
           end
 
           -- ensure that everything is of the correct type
           if type_of_val == "text" then
-            data[key] = tostring(entry[key])
+            -- convert value to string and remove stray control characters
+            data[key] = string.gsub(tostring(entry[key]), "[%c]", "")
           elseif type_of_val == "luatable" then
             if type(entry[key]) == "table" then
               data[key] = entry[key]
             else
-              log.warn("Wanted to add `" .. key .. "` of `" .. entry["ref"] .. "` but the value is not of type `table`")
+              vim.notify("Wanted to add `" .. key .. "` of `" .. entry.ref .. "` but the value is not of type `table`",
+                vim.log.levels.WARN)
               data[key] = {}
             end
           end
         end
       end
-      table.insert(data_complete, { data, { path = path, mtime = mtime } })
+      data_complete[#data_complete + 1] = { data, { path = path, mtime = mtime } }
     end
   end
   return data_complete

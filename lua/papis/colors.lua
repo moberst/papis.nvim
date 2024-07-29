@@ -9,16 +9,18 @@ local M = {}
 
 local links = {
   PreviewAuthor = "Title",
-  PreviewYear = "Statement",
-  PreviewTitle = "Normal",
-  PreviewKey = "Conditional",
-  PreviewValue = "Normal",
+  PreviewYear = "@string",
+  PreviewTitle = "@variable",
+  PreviewKey = "@property",
+  PreviewValue = "@variable",
   PopupAuthor = "Title",
-  PopupYear = "Statement",
-  PopupTitle = "Normal",
-  ResultsAuthor = "PreProc",
-  ResultsYear = "Statement",
-  ResultsTitle = "Struct",
+  PopupYear = "@string",
+  PopupTitle = "@variable",
+  ResultsAuthor = "Title",
+  ResultsYear = "@string",
+  ResultsTitle = "@variable",
+  ResultsFiles = "@property",
+  ResultsNotes = "@comment.warning",
 }
 
 ---Sets up all the default highlight groups

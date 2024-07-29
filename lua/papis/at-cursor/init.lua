@@ -1,5 +1,5 @@
 --
--- PAPIS | CURSOR-ACTIONS
+-- PAPIS | AT-CURSOR
 --
 --
 -- Various functionalities when the cursor is over a citation reference.
@@ -9,18 +9,18 @@ local NuiPopup = require("nui.popup")
 local nuiAutocmd = require("nui.utils.autocmd")
 local nuiEvent = require("nui.utils.autocmd").event
 
-local opt = vim.opt
 local fn = vim.fn
 
-local log = require("papis.logger")
+local log = require("papis.log")
 local config = require("papis.config")
-local popup_format = config["cursor-actions"]["popup_format"]
+local popup_format = config["at-cursor"].popup_format
 local utils = require("papis.utils")
+local commands = require("papis.commands")
+local keymaps = require("papis.keymaps")
 local db = require("papis.sqlite-wrapper")
 if not db then
   return nil
 end
-local hover_required_db_keys = utils:get_required_db_keys({ popup_format })
 
 ---Tries to identify the ref under cursor
 ---@return string|nil #Nil if nothing is found, otherwise is the identified ref
@@ -57,23 +57,22 @@ local function if_ref_valid_run_fun(fun, self, type)
   local ref = get_ref_under_cursor()
   local entry = db.data:get({ ref = ref }, { "papis_id" })
   if not vim.tbl_isempty(entry) then
-    local papis_id = entry[1]["papis_id"]
+    local papis_id = entry[1].papis_id
     if self then
       fun(self, papis_id, type)
     else
       fun(papis_id, type)
     end
   else
-    log.info(string.format("No entry in database corresponds to '%s'", ref))
+    vim.notify(string.format("No entry in database corresponds to '%s'", ref), vim.log.levels.WARN)
   end
 end
 
 ---Creates a popup with information regarding the entry specified by `ref`
 ---@param papis_id string #The `papis_id` of the entry
 local function create_hover_popup(papis_id)
-  local entry = db.data:get({ papis_id = papis_id }, hover_required_db_keys)[1]
-  local clean_popup_format = utils.do_clean_format_tbl(popup_format, entry)
-  local popup_lines, width = utils.make_nui_lines(clean_popup_format, entry)
+  local entry = db.data:get({ papis_id = papis_id })[1]
+  local popup_lines, width = utils:make_nui_lines(popup_format, entry)
 
   local popup = NuiPopup({
     position = 1,
@@ -100,26 +99,78 @@ local function create_hover_popup(papis_id)
   end
 end
 
+---@class PapisSubcommand
+local module_subcommands = {
+  ["at-cursor"] = {
+    impl = function(args, _)
+      if args[1] == "open-file" then
+        if_ref_valid_run_fun(utils.do_open_attached_files, utils)
+      elseif args[1] == "open-note" then
+        if_ref_valid_run_fun(utils.do_open_text_file, utils, "note")
+      elseif args[1] == "edit" then
+        if_ref_valid_run_fun(utils.do_open_text_file, utils, "info")
+      elseif args[1] == "show-popup" then
+        if_ref_valid_run_fun(create_hover_popup)
+      end
+    end,
+    complete = function(subcmd_arg_lead)
+      local at_cursor_args = {
+        "open-file",
+        "open-note",
+        "edit",
+        "show-popup",
+      }
+      return vim.iter(at_cursor_args)
+          :filter(function(install_arg)
+            return install_arg:find(subcmd_arg_lead) ~= nil
+          end)
+          :totable()
+    end,
+  }
+}
+
+---@class PapisKeymaps
+local module_keymaps = {
+  open_file = {
+    mode = "n",
+    lhs = "<leader>pof",
+    rhs = function()
+      vim.cmd("Papis at-cursor open-file")
+    end,
+    opts = { desc = "Papis: open file under cursor" },
+  },
+  edit_entry = {
+    mode = "n",
+    lhs = "<leader>pe",
+    rhs = function()
+      vim.cmd("Papis at-cursor edit")
+    end,
+    opts = { desc = "Papis: edit entry under cursor" },
+  },
+  open_note = {
+    mode = "n",
+    lhs = "<leader>pon",
+    rhs = function()
+      vim.cmd("Papis at-cursor open-note")
+    end,
+    opts = { desc = "Papis: open note under cursor" },
+  },
+  show_popup = {
+    mode = "n",
+    lhs = "<leader>pi",
+    rhs = function()
+      vim.cmd("Papis at-cursor show-popup")
+    end,
+    opts = { desc = "Papis: show entry info popup" },
+  },
+}
+
 local M = {}
 
----Opens the file of the `ref` under cursor
-function M.open_file()
-  if_ref_valid_run_fun(utils.do_open_attached_files, utils)
-end
-
----Opens the note of the `ref` under cursor
-function M.open_note()
-  if_ref_valid_run_fun(utils.do_open_text_file, utils, "note")
-end
-
----Edits the entry of the `ref` under cursor
-function M.edit_entry()
-  if_ref_valid_run_fun(utils.do_open_text_file, utils, "info")
-end
-
----Shows a popup with information about the entry of the `ref` under cursor
-function M.show_popup()
-  if_ref_valid_run_fun(create_hover_popup)
+function M.setup()
+  log.debug("Setting up at-cursor")
+  commands:add_commands(module_subcommands)
+  keymaps:add_keymaps(module_keymaps)
 end
 
 return M
