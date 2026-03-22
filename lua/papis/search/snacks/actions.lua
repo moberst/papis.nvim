@@ -20,6 +20,20 @@ function M.ref_insert(picker, item)
   picker:close()
 
   local cite_format = config:get_cite_format()
+
+  if cite_format.handler then
+    local papis_ids = {}
+    if vim.tbl_isempty(selected) then
+      papis_ids[1] = item.entry.papis_id
+    else
+      for _, it in pairs(selected) do
+        papis_ids[#papis_ids + 1] = it.entry.papis_id
+      end
+    end
+    cite_format.handler(papis_ids)
+    return
+  end
+
   local start_str = cite_format.start_str or ""
   local end_str = cite_format.end_str or ""
   local ref_prefix = cite_format.ref_prefix or ""

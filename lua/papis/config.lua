@@ -58,8 +58,16 @@
 ---@field enable boolean
 ---@field logging table<string, string>
 
+---@class PapisCiteFormat
+---@field start_str? string
+---@field start_pattern? string
+---@field end_str? string
+---@field ref_prefix? string
+---@field separator_str string
+---@field handler? fun(papis_ids: string[])
+
 ---@class (exact) PapisConfigDefault
----@field cite_formats table<string, table<string, string>>
+---@field cite_formats table<string, PapisCiteFormat>
 ---@field cite_formats_fallback string
 ---@field always_use_plain boolean
 ---@field enable_keymaps boolean
@@ -116,6 +124,12 @@ local default_config = {
       ref_prefix = "@",
       separator_str = " ",
     },
+    bib = {
+      handler = function(papis_ids)
+        require("papis.search.bibtex").insert_bibtex(papis_ids)
+      end,
+      separator_str = "\n\n",
+    },
   },
   cite_formats_fallback = "plain",
   always_use_plain = false,
@@ -145,7 +159,7 @@ local default_config = {
   db_path = vim.fn.stdpath("data") .. "/papis/papis-nvim.sqlite3",
   yq_bin = "yq",
   papis_cmd_base = { "papis" },
-  init_filetypes = { "markdown", "norg", "yaml", "typst" },
+  init_filetypes = { "markdown", "norg", "yaml", "typst", "bib" },
   papis_conf_keys = { "info-name", "notes-name", "dir", "opentool" },
   enable_icons = true,
   ["formatter"] = {

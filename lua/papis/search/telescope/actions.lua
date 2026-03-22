@@ -30,6 +30,20 @@ M.ref_insert = function(prompt_bufnr)
   local selected = get_selected(prompt_bufnr)
   actions.close(prompt_bufnr)
   local cite_format = config:get_cite_format()
+
+  if cite_format.handler then
+    local papis_ids = {}
+    if vim.tbl_isempty(selected) then
+      papis_ids[1] = action_state.get_selected_entry().entry.papis_id
+    else
+      for _, item in pairs(selected) do
+        papis_ids[#papis_ids + 1] = item.entry.papis_id
+      end
+    end
+    cite_format.handler(papis_ids)
+    return
+  end
+
   local start_str = cite_format.start_str or ""
   local end_str = cite_format.end_str or ""
   local ref_prefix = cite_format.ref_prefix or ""
